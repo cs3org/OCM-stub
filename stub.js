@@ -248,7 +248,7 @@ async function createShare(consumer) {
 
   const shareSpec = {
     shareWith: consumer,
-    name: 'Test share from stub',
+    name: 'from-stub.txt',
     providerId: PROVIDER_ID,
     meshProvider: MESH_PROVIDER,
     owner: `${USER}@${SERVER_HOST}`,
