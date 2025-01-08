@@ -6,6 +6,8 @@ const util = require('util');
 // const exec = util.promisify(require('child_process').exec);
 const crypto = require('crypto');
 
+const sharesSent = {};
+
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: {
@@ -503,10 +505,21 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
         await forwardInvite(decodeURIComponent(urlObj.search).substring('?'.length));
         sendHTML(res, 'yes forwardInvite');
       } else if (req.url.startsWith('/shareWith')) {
-        console.log('yes shareWith');
         const urlObj = new URL(req.url, SERVER_ROOT);
-        await createShare(decodeURIComponent(urlObj.search).substring('?'.length));
-        sendHTML(res, 'yes shareWith');
+        const recipient = decodeURIComponent(urlObj.search).substring('?'.length);
+        if (typeof sharesSent[recipient] === 'undefined') {
+          console.log('yes shareWith');
+          sharesSent[recipient] = true;
+          try {
+            await createShare(recipient);
+            sendHTML(res, 'yes shareWith (success)');
+          } catch (e) {
+            sendHTML(res, 'yes shareWith (fail)');
+          }
+        } else {
+          console.log('yes shareWith (ignoring)');
+          sendHTML(res, 'yes shareWith (ignoring)');
+        }
       } else if (req.url.startsWith('/acceptShare')) {
         console.log('yes acceptShare');
         try {
