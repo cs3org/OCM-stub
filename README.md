@@ -1,6 +1,10 @@
-# ocm-stub
-Stub server for testing Open Cloud Mesh (OCM) https://github.com/cs3org/OCM-API
+# OCM Stub
 
+![OCM Logo](https://github.com/cs3org/OCM-API/raw/develop/logo.png)
+
+A Stub server for testing the Open Cloud Mesh (OCM) Protocol Specification, maintained at https://github.com/cs3org/OCM-API
+
+Run with:
 
 ```sh
 mkdir -p ../tls
