@@ -267,7 +267,7 @@ async function createShare(consumer) {
       },
       webdav: {
         sharedSecret: 'shareMeNot',
-        URI: 'https://localhost/webdav-api/file.txt'
+        URI: `https://${SERVER_HOST}/webdav-api/file.txt`
       }
     }
   }
