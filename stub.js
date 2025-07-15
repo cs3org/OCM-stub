@@ -9,15 +9,15 @@ const crypto = require('crypto');
 const sharesSent = {};
 
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    publicKeyEncoding: {
-        type: 'pkcs1',
-        format: 'pem'
-    },
-    privateKeyEncoding: {
-        type: 'pkcs1',
-        format: 'pem'
-    }
+  modulusLength: 2048,
+  publicKeyEncoding: {
+    type: 'pkcs1',
+    format: 'pem'
+  },
+  privateKeyEncoding: {
+    type: 'pkcs1',
+    format: 'pem'
+  }
 });
 const TLS_DIR = '../tls';
 
@@ -27,6 +27,24 @@ const SERVER_ROOT = `https://${SERVER_HOST}`;
 const USER = `einstein`;
 const PROVIDER_ID = SERVER_HOST;
 const MESH_PROVIDER = SERVER_HOST;
+
+function getProviderDescriptor() {
+  return {
+    enabled: true,
+    apiVersion: '1.2.0',
+    endPoint: `${SERVER_ROOT}/ocm`,
+    resourceTypes: [
+      {
+        name: 'file',
+        shareTypes: ['user', 'group'],
+        protocols: {
+          webdav: '/webdav-api/'
+        }
+      }
+    ],
+    publicKey
+  };
+}
 
 const PROPFIND_RESPONSE = `\
 <?xml version="1.0"?>\
@@ -62,7 +80,7 @@ const PROPFIND_RESPONSE = `\
 const HTTPS_OPTIONS = {
   key: fs.readFileSync(`${TLS_DIR}/${SERVER_NAME}.key`),
   cert: fs.readFileSync(`${TLS_DIR}/${SERVER_NAME}.crt`)
-}
+};
 
 const grants = {
   'localhost': {
@@ -98,7 +116,7 @@ const grants = {
   'cernbox2.docker': {
     '123456': 'asdfgh'
   }
-}
+};
 
 function sendHTML(res, text) {
   res.end(`<!DOCTYPE html><html><head></head><body>${text}</body></html>`);
@@ -351,12 +369,15 @@ async function checkSignature(bodyIn, headersIn, url, method) {
 const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
   console.log(req.method, req.url, req.headers);
   let bodyIn = '';
+
   req.on('data', (chunk) => {
     console.log('CHUNK', chunk.toString());
     bodyIn += chunk.toString();
   });
+
   req.on('end', async () => {
     try {
+      
       if (req.url === '/ocm/token') {
         const signingServer = await checkSignature(bodyIn, req.headers, `https://${SERVER_HOST}${req.url}`, 'POST');
         console.log('token request', bodyIn, signingServer);
@@ -389,9 +410,9 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
       } else if (((req.url === '/webdav-api/') || (req.url === '/public.php/webdav/')) && (req.method === 'PROPFIND')) {
         console.log('PROPFIND', req.headers['authorization']);
         // if (req.headers['authorization'] === `Bearer asdfgh`) {
-          res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-          res.writeHead(207);
-          res.end(PROPFIND_RESPONSE);
+        res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+        res.writeHead(207);
+        res.end(PROPFIND_RESPONSE);
         // } else if (typeof req.headers['authorization'] === 'string') {
         //   res.writeHead(403);
         //   res.end('No access, sorry\n');
@@ -407,25 +428,17 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
           res.writeHead(403);
           res.end('No access, sorry\n');
         } else {
-          res.writeHead(401);
-          res.end('Please use a short-lived bearer for this API. You can exchange the code from the share at the token endpoint using httpsig\n');
+          res.writeHead(req.headers['authorization'] ? 403 : 401);
+          res.end('Unauthorized: Please use a short-lived bearer for this API. You can exchange the code from the share at the token endpoint using httpsig\n');
         }
-    } else if (req.url === '/ocm-provider/' || req.url === '/.well-known/ocm') {
-        console.log(`yes ${req.url}`);
-        res.setHeader('content-type', 'application/json');
-        res.end(JSON.stringify({
-          enabled: true,
-          apiVersion: '1.0-proposal1',
-          endPoint: `${SERVER_ROOT}/ocm`,
-          resourceTypes: [
-            {
-              name: 'file',
-              shareTypes: [ 'user', 'group' ],
-              protocols: { webdav: '/webdav-api/' }
-            }
-          ],
-          publicKey
-        }));
+      } else if (
+        req.url === '/ocm-provider' ||
+        req.url === '/ocm-provider/' ||
+        req.url === '/.well-known/ocm' ||
+        req.url === '/.well-known/ocm/'
+      ) {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(getProviderDescriptor()));
       } else if (req.url === '/ocm/shares') {
         console.log('yes /ocm/shares');
         try {
@@ -619,9 +632,13 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
       }
     } catch (e) {
       console.error(e);
+      res.writeHead(500);
+      sendHTML(res, 'Internal Server Error');
     }
   });
 });
-server.listen(443);
-console.log(`Browse to https://${SERVER_HOST}/ocm-provider/ or https://${SERVER_HOST}/shareWith?bob@${SERVER_HOST}`);
 
+server.listen(443, () => {
+  console.log(`OCM-stub listening on https://${SERVER_HOST}`);
+  console.log(`Browse to https://${SERVER_HOST}/ocm-provider or https://${SERVER_HOST}/shareWith?bob@${SERVER_HOST}`);
+});
