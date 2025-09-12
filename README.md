@@ -1,6 +1,8 @@
-# OCM Stub
+<p align="center">
+  <img src="https://github.com/cs3org/OCM-API/blob/develop/logo/OpenCloudMesh-text-vertical-300x116.png" alt="Open Cloud Mesh Logo"/>
+</p>
 
-![OCM Logo](https://github.com/cs3org/OCM-API/raw/develop/logo.png)
+# OCM Stub
 
 A Stub server for testing the Open Cloud Mesh (OCM) Protocol Specification, maintained at https://github.com/cs3org/OCM-API
 
