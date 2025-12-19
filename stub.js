@@ -8,6 +8,10 @@ const crypto = require('crypto');
 
 const sharesSent = {};
 
+// Invite-link state
+const STUB_INVITE_TOKEN = 'stub-invite-token-123456';
+const acceptedInvites = {}; // Maps recipientProvider -> user info
+
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
   publicKeyEncoding: {
@@ -42,6 +46,9 @@ function getProviderDescriptor() {
         }
       }
     ],
+    capabilities: ['invites', 'exchange-token'],
+    tokenEndPoint: 'ocm/token',
+    inviteAcceptDialog: '/accept-invite',
     publicKey
   };
 }
@@ -140,9 +147,20 @@ async function check(message, signature) {
   return verify;
 }
 
+// Extract public key from either PEM string or {publicKeyPem: ...} object
+function extractPublicKey(keyData) {
+  if (typeof keyData === 'string') {
+    return keyData;
+  }
+  if (keyData && typeof keyData === 'object' && keyData.publicKeyPem) {
+    return keyData.publicKeyPem;
+  }
+  return keyData; // Return as-is and let crypto fail with a clear error
+}
+
 async function verify(message, signature, fqdn) {
   const senderConfig = await getServerConfigForServer(fqdn);
-  const senderPubKey = senderConfig.config.publicKey;
+  const senderPubKey = extractPublicKey(senderConfig.config.publicKey);
   console.log('fetched sender pub key', senderConfig, senderPubKey);
   console.log('RECIPIENT VERIFY', message, signature, senderPubKey);
   const data = Buffer.from(message);
@@ -407,6 +425,190 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
           expires_in: 3600,
           refresh_token: 'qwertyuiop',
         }));
+      } else if (req.url === '/ocm/generate-invite-token' && req.method === 'GET') {
+        // Generate/return the hardcoded invite token for this Stub's user
+        console.log('generate-invite-token request');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          token: STUB_INVITE_TOKEN,
+          inviteLink: `${SERVER_ROOT}/accept-invite?token=${STUB_INVITE_TOKEN}&providerDomain=${SERVER_HOST}`,
+          user: USER,
+          providerDomain: SERVER_HOST
+        }));
+      } else if (req.url === '/invite-accepted' && req.method === 'POST') {
+        // Handle invite acceptance from a remote provider (Stub as inviter)
+        console.log('invite-accepted request', bodyIn);
+        let inviteReq;
+        try {
+          inviteReq = JSON.parse(bodyIn);
+        } catch (e) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Cannot parse JSON body' }));
+          return;
+        }
+        // Validate required fields per OCM spec AcceptedInvite schema
+        const { recipientProvider, token, userID, email, name } = inviteReq;
+        if (!recipientProvider || !token || !userID) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Missing required fields: recipientProvider, token, userID' }));
+          return;
+        }
+        // Validate the invite token
+        if (token !== STUB_INVITE_TOKEN) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Invalid or expired invite token' }));
+          return;
+        }
+        // Store the accepted invite (contact established)
+        acceptedInvites[recipientProvider] = { userID, email, name };
+        console.log('Invite accepted, contact established:', recipientProvider, acceptedInvites[recipientProvider]);
+        // Return AcceptedInviteResponse with this Stub's user info
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          userID: USER,
+          email: `${USER}@${SERVER_HOST}`,
+          name: 'Albert Einstein'
+        }));
+      } else if (req.url.startsWith('/accept-invite') && req.method === 'GET') {
+        // Invite accept dialog page (Stub as receiver, forwarding to remote inviter)
+        const urlObj = new URL(req.url, SERVER_ROOT);
+        const token = urlObj.searchParams.get('token');
+        const providerDomain = urlObj.searchParams.get('providerDomain');
+        console.log('accept-invite request', { token, providerDomain });
+        if (!token || !providerDomain) {
+          res.writeHead(400);
+          sendHTML(res, 'Missing required query parameters: token, providerDomain');
+          return;
+        }
+        try {
+          // Discover the remote provider's endpoint
+          const { config, fqdn } = await getServerConfigForServer(providerDomain);
+          let endPoint = config.endPoint || config.endpoint;
+          if (!endPoint) {
+            res.writeHead(500);
+            sendHTML(res, `Could not discover endpoint for ${providerDomain}`);
+            return;
+          }
+          if (endPoint.endsWith('/')) {
+            endPoint = endPoint.slice(0, -1);
+          }
+          // Build AcceptedInvite payload per OCM spec
+          const acceptPayload = {
+            recipientProvider: SERVER_HOST,
+            token: token,
+            userID: USER,
+            email: `${USER}@${SERVER_HOST}`,
+            name: 'Albert Einstein'
+          };
+          // Determine which endpoint to POST to:
+          // - For Stub peers: /invite-accepted (spec-shaped)
+          // - For CERNBox/Reva: /invites/accept (Reva-style)
+          // We try to detect by checking if endPoint contains known patterns
+          let inviteAcceptUrl;
+          if (endPoint.includes('cernbox') || endPoint.includes('reva') || fqdn.includes('cernbox')) {
+            // Reva/CERNBox uses /invites/accept with a nested structure
+            inviteAcceptUrl = `${endPoint}/invites/accept`;
+            // Reva expects: { invite: { token, userId, recipientProvider, name, email } }
+            const revaPayload = {
+              invite: {
+                token: token,
+                userId: USER,
+                recipientProvider: SERVER_HOST,
+                name: 'Albert Einstein',
+                email: `${USER}@${SERVER_HOST}`
+              }
+            };
+            console.log('Forwarding invite to Reva/CERNBox:', inviteAcceptUrl, JSON.stringify(revaPayload, null, 2));
+            const postRes = await fetch(inviteAcceptUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(revaPayload)
+            });
+            const responseText = await postRes.text();
+            console.log('Reva invite response:', postRes.status, responseText);
+            if (postRes.ok) {
+              // Store the contact on our side
+              acceptedInvites[providerDomain] = { userID: 'remote-user', email: '', name: '' };
+              sendHTML(res, `<h1>Invite Accepted</h1><p>You are now connected to ${providerDomain}</p><p>Response: ${responseText}</p>`);
+            } else {
+              sendHTML(res, `<h1>Invite Failed</h1><p>Could not accept invite from ${providerDomain}</p><p>Status: ${postRes.status}</p><p>Response: ${responseText}</p>`);
+            }
+          } else {
+            // Spec-shaped Stub or other OCM provider uses /invite-accepted
+            inviteAcceptUrl = `${endPoint}/invite-accepted`;
+            console.log('Forwarding invite to OCM provider:', inviteAcceptUrl, JSON.stringify(acceptPayload, null, 2));
+            const postRes = await fetch(inviteAcceptUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(acceptPayload)
+            });
+            const responseText = await postRes.text();
+            console.log('OCM invite response:', postRes.status, responseText);
+            if (postRes.ok) {
+              // Store the contact on our side
+              try {
+                const remoteUser = JSON.parse(responseText);
+                acceptedInvites[providerDomain] = { userID: remoteUser.userID, email: remoteUser.email, name: remoteUser.name };
+              } catch (e) {
+                acceptedInvites[providerDomain] = { userID: 'remote-user', email: '', name: '' };
+              }
+              sendHTML(res, `<h1>Invite Accepted</h1><p>You are now connected to ${providerDomain}</p><p>Response: ${responseText}</p>`);
+            } else {
+              sendHTML(res, `<h1>Invite Failed</h1><p>Could not accept invite from ${providerDomain}</p><p>Status: ${postRes.status}</p><p>Response: ${responseText}</p>`);
+            }
+          }
+        } catch (e) {
+          console.error('Error forwarding invite:', e);
+          res.writeHead(500);
+          sendHTML(res, `<h1>Error</h1><p>Failed to forward invite: ${e.message}</p>`);
+        }
+      } else if (req.url.startsWith('/ocm/invites/forward') || req.url.startsWith('/invites/forward')) {
+        // Legacy redirect to accept-invite
+        const urlObj = new URL(req.url, SERVER_ROOT);
+        const token = urlObj.searchParams.get('token');
+        const providerDomain = urlObj.searchParams.get('providerDomain');
+        res.writeHead(302, { Location: `/accept-invite?token=${token}&providerDomain=${providerDomain}` });
+        res.end();
+      } else if ((req.url === '/invites/accept' || req.url === '/ocm/invites/accept') && req.method === 'POST') {
+        // Reva-style invite acceptance (Stub as inviter, receiving from CERNBox/Reva)
+        // Reva sends: { invite: { token, userId, recipientProvider, name, email } }
+        console.log('invites/accept request (Reva-style)', bodyIn);
+        let revaReq;
+        try {
+          revaReq = JSON.parse(bodyIn);
+        } catch (e) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Cannot parse JSON body' }));
+          return;
+        }
+        const invite = revaReq.invite || revaReq;
+        const { token, userId, recipientProvider, name, email } = invite;
+        if (!recipientProvider || !token || !userId) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Missing required fields in invite object' }));
+          return;
+        }
+        if (token !== STUB_INVITE_TOKEN) {
+          res.writeHead(400);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ message: 'Invalid or expired invite token' }));
+          return;
+        }
+        // Store the accepted invite
+        acceptedInvites[recipientProvider] = { userID: userId, email: email || '', name: name || '' };
+        console.log('Reva-style invite accepted:', recipientProvider, acceptedInvites[recipientProvider]);
+        // Return Reva-style response (similar to AcceptedInviteResponse)
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          userID: USER,
+          email: `${USER}@${SERVER_HOST}`,
+          name: 'Albert Einstein'
+        }));
       } else if (((req.url === '/webdav-api/') || (req.url === '/public.php/webdav/')) && (req.method === 'PROPFIND')) {
         console.log('PROPFIND', req.headers['authorization']);
         // if (req.headers['authorization'] === `Bearer asdfgh`) {
@@ -606,7 +808,11 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
           owncloud1: "https://owncloud1.docker/index.php/apps/sciencemesh/accept",
           nextcloud2: "https://nextcloud2.docker/index.php/apps/sciencemesh/accept",
           owncloud2: "https://owncloud2.docker/index.php/apps/sciencemesh/accept",
-          stub2: "https://stub.docker/ocm/invites/forward",
+          ocmstub1: "https://ocmstub1.docker/accept-invite",
+          ocmstub2: "https://ocmstub2.docker/accept-invite",
+          stub2: "https://ocmstub2.docker/accept-invite",
+          cernbox1: "https://cernbox1.docker/accept-invite",
+          cernbox2: "https://cernbox2.docker/accept-invite",
           revad2: undefined
         };
         const items = [];
