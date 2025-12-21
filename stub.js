@@ -658,25 +658,36 @@ const server = https.createServer(HTTPS_OPTIONS, async (req, res) => {
           const responseText = await postRes.text();
           console.log("Invite response:", postRes.status, responseText);
 
-          if (postRes.ok) {
-            // Store the contact on our side
-            try {
-              const remoteUser = JSON.parse(responseText);
-              acceptedInvites[providerDomain] = {
-                userID: remoteUser.userID,
-                email: remoteUser.email,
-                name: remoteUser.name,
-              };
-            } catch (e) {
-              acceptedInvites[providerDomain] = {
-                userID: "remote-user",
-                email: "",
-                name: "",
-              };
+          // Treat 200 OK as success, and 409 "already accepted" as a
+          // user-visible success as well. From the user's perspective,
+          // an already-accepted invite means the contact is established.
+          if (postRes.ok || postRes.status === 409) {
+            // Store or confirm the contact on our side for 2xx responses.
+            // For 409 we rely on previously stored state.
+            if (postRes.ok) {
+              try {
+                const remoteUser = JSON.parse(responseText);
+                acceptedInvites[providerDomain] = {
+                  userID: remoteUser.userID,
+                  email: remoteUser.email,
+                  name: remoteUser.name,
+                };
+              } catch (e) {
+                acceptedInvites[providerDomain] = {
+                  userID: "remote-user",
+                  email: "",
+                  name: "",
+                };
+              }
             }
+
+            const already =
+              postRes.status === 409
+                ? " (already accepted earlier)"
+                : "";
             sendHTML(
               res,
-              `<h1>Invite Accepted</h1><p>You are now connected to ${providerDomain}</p><p>Response: ${responseText}</p>`
+              `<h1>Invite Accepted</h1><p>You are now connected to ${providerDomain}${already}</p><p>Response: ${responseText}</p>`
             );
           } else {
             sendHTML(
