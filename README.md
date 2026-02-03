@@ -17,6 +17,16 @@ openssl req -new -x509 -days 365 -nodes \
 NODE_TLS_REJECT_UNAUTHORIZED=0 SERVER_HOST=localhost node stub.js 
 ```
 
+You may need to install `node-fetch` depending on your environment:
+
+```sh
+npm install node-fetch
+```
+
+If you need to alter the port the server will use alter `stub.js`
+looking for hte `server.listen` line at the end of the file.
+
+
 Then visit for instance:
 * https://localhost/ocm-provider/
 * https://localhost/shareWith?bob@localhost
